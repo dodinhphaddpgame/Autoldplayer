@@ -3,9 +3,12 @@ import tkinter as tk
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from time import sleep
 
-# Đường dẫn tới ldconsole.exe (bạn sửa lại đúng trên máy mình)
+# Đường dẫn tới ldconsole.exe
 LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"
+# Package game cần mở (sửa tên package nếu cần)
+GAME_PACKAGE = "vn.kvtm.js"
 
 # Hàm chạy lệnh ldconsole
 def run_ldconsole(args):
@@ -31,7 +34,7 @@ def tap_instance(index, x, y):
     run_ldconsole(["adb", "--index", index, "--command", f"shell input tap {x} {y}"])
     log(f"Tap ({x},{y}) trên LDPlayer {index}")
 
-# Hàm auto
+# Hàm auto test tap
 def test_all():
     instances = get_instances()
     log(f"Các instance đang chạy: {instances}")
@@ -42,6 +45,15 @@ def test_all():
 def start_auto():
     threading.Thread(target=test_all, daemon=True).start()
 
+# Hàm mở game trên LDPlayer
+def open_game(index):
+    sleep(15)  # chờ LDPlayer boot lâu hơn
+    run_ldconsole([
+        "adb", "--index", str(index),
+        "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    ])
+    log(f"Đã mở game {GAME_PACKAGE} trên LDPlayer {index}")
+
 # Hàm mở tab LDPlayer theo khoảng index
 def open_tabs():
     try:
@@ -50,6 +62,7 @@ def open_tabs():
         for idx in range(start_idx, end_idx + 1):
             run_ldconsole(["launch", "--index", str(idx)])
             log(f"Đã mở LDPlayer instance {idx}")
+            threading.Thread(target=open_game, args=(idx,), daemon=True).start()
     except ValueError:
         log("Vui lòng nhập số hợp lệ!")
 
