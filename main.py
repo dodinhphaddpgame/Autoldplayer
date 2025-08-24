@@ -1,8 +1,9 @@
 import subprocess
 import tkinter as tk
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
-# Đường dẫn tới ldconsole.exe (bạn sửa lại cho đúng máy mình)
+# Đường dẫn tới ldconsole.exe (sửa lại đúng trên máy bạn)
 LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"
 
 # Hàm chạy lệnh ldconsole
@@ -17,9 +18,10 @@ def get_instances():
     instances = []
     for line in output.splitlines():
         parts = line.split(",")
-        if len(parts) >= 2 and parts[0].isdigit():
+        if len(parts) >= 5 and parts[0].isdigit():
             index = parts[0].strip()
-            if index != "99999":  # bỏ instance ảo
+            status = parts[4].strip()
+            if index != "99999" and status == "1":  # chỉ lấy instance đang chạy
                 instances.append(index)
     return instances
 
@@ -34,17 +36,20 @@ def swipe_instance(index, x1, y1, x2, y2, duration=500):
                    f"shell input swipe {x1} {y1} {x2} {y2} {duration}"])
     log(f"[+] Swipe ({x1},{y1}) → ({x2},{y2}) trên LDPlayer {index}")
 
-# Hàm thực hiện auto
+# Hàm auto
 def test_all():
     instances = get_instances()
     log(f"Các instance đang chạy: {instances}")
     with ThreadPoolExecutor() as executor:
-        # tap tại (200,200)
         executor.map(lambda idx: tap_instance(idx, 200, 200), instances)
-        # swipe từ (100,400) lên (100,100) - bật lên nếu cần
+        # Có thể bật swipe nếu muốn
         #executor.map(lambda idx: swipe_instance(idx, 100, 400, 100, 100), instances)
 
-# Hàm log ra cửa sổ GUI
+# Hàm chạy auto trong thread riêng
+def start_auto():
+    threading.Thread(target=test_all, daemon=True).start()
+
+# Hàm log ra GUI
 def log(message):
     text_box.insert(tk.END, message + "\n")
     text_box.see(tk.END)
@@ -55,12 +60,11 @@ root.title("LDPlayer Auto Controller")
 root.geometry("500x300")
 
 # Nút Start
-start_button = tk.Button(root, text="Start Auto", font=("Arial", 14), bg="green", fg="white", command=test_all)
+start_button = tk.Button(root, text="Start Auto", font=("Arial", 14), bg="green", fg="white", command=start_auto)
 start_button.pack(pady=10)
 
 # Khung log hiển thị kết quả
 text_box = tk.Text(root, height=12, width=60)
 text_box.pack(pady=10)
 
-# Chạy GUI loop
 root.mainloop()
