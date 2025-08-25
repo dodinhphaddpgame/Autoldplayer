@@ -99,9 +99,9 @@ def worker_instance(idx):
     # Vòng lặp xử lý (giả sử chỉ chạy 3 lần rồi kết thúc)
     sleep(10)
     for i in range(3):
-        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 860 9300"])
-        log(f"[LD {idx}] ({account_name}) Tap (922,466)")
-        sleep(5)
+        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 470 910"])
+        log(f"[LD {idx}] ({account_name}) Tap (470,910)")
+        sleep(1)
 
     # Khi luồng hoàn tất → lưu account vào file
     save_account_done(account_name)
@@ -127,16 +127,28 @@ def close_all_tabs():
         for idx in instances:
             run_ldconsole(["quit", "--index", idx])
             log(f"Đã gửi lệnh tắt LDPlayer instance {idx}")
-            sleep(1)  # chờ LDPlayer xử lý shutdown
+            sleep(1)
 
 # Chạy close_all_tabs trong thread riêng để tránh treo GUI
 def close_all_tabs_thread():
     threading.Thread(target=close_all_tabs, daemon=True).start()
 
+# ================= Test Click =================
+
+def test_click():
+    try:
+        idx = int(entry_test_index.get())
+        x = int(entry_x.get())
+        y = int(entry_y.get())
+        run_ldconsole(["adb", "--index", str(idx), "--command", f"shell input tap {x} {y}"])
+        log(f"[LD {idx}] Test Click tại ({x},{y})")
+    except ValueError:
+        log("Nhập số hợp lệ cho index, x, y!")
+
 # ================= GUI =================
 root = tk.Tk()
 root.title("LDPlayer Auto Controller")
-root.geometry("600x420")
+root.geometry("600x480")
 
 frame_range = tk.Frame(root)
 frame_range.pack(pady=5)
@@ -152,11 +164,32 @@ entry_end.grid(row=0, column=3, padx=5)
 entry_end.insert(0, "3")
 
 open_button = tk.Button(root, text="Open Tabs", font=("Arial", 14), bg="blue", fg="white", command=open_tabs)
-open_button.pack(pady=10)
+open_button.pack(pady=5)
 
-# Gọi close_all_tabs_thread thay vì close_all_tabs trực tiếp
 close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white", command=close_all_tabs_thread)
-close_button.pack(pady=10)
+close_button.pack(pady=5)
+
+# Khung test click
+frame_test = tk.Frame(root)
+frame_test.pack(pady=10)
+
+tk.Label(frame_test, text="Index:").grid(row=0, column=0, padx=5)
+entry_test_index = tk.Entry(frame_test, width=5)
+entry_test_index.grid(row=0, column=1, padx=5)
+entry_test_index.insert(0, "1")
+
+tk.Label(frame_test, text="X:").grid(row=0, column=2, padx=5)
+entry_x = tk.Entry(frame_test, width=6)
+entry_x.grid(row=0, column=3, padx=5)
+entry_x.insert(0, "300")
+
+tk.Label(frame_test, text="Y:").grid(row=0, column=4, padx=5)
+entry_y = tk.Entry(frame_test, width=6)
+entry_y.grid(row=0, column=5, padx=5)
+entry_y.insert(0, "300")
+
+test_button = tk.Button(frame_test, text="Test Click", font=("Arial", 12), bg="green", fg="white", command=test_click)
+test_button.grid(row=0, column=6, padx=10)
 
 text_box = tk.Text(root, height=12, width=70)
 text_box.pack(pady=10)
