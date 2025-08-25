@@ -99,8 +99,8 @@ def worker_instance(idx):
     # Vòng lặp xử lý (giả sử chỉ chạy 3 lần rồi kết thúc)
     sleep(10)
     for i in range(3):
-        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 200 200"])
-        log(f"[LD {idx}] ({account_name}) Tap (535,955)")
+        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 860 9300"])
+        log(f"[LD {idx}] ({account_name}) Tap (922,466)")
         sleep(5)
 
     # Khi luồng hoàn tất → lưu account vào file
@@ -127,7 +127,11 @@ def close_all_tabs():
         for idx in instances:
             run_ldconsole(["quit", "--index", idx])
             log(f"Đã gửi lệnh tắt LDPlayer instance {idx}")
-            sleep(5)  # chờ LDPlayer xử lý shutdown
+            sleep(1)  # chờ LDPlayer xử lý shutdown
+
+# Chạy close_all_tabs trong thread riêng để tránh treo GUI
+def close_all_tabs_thread():
+    threading.Thread(target=close_all_tabs, daemon=True).start()
 
 # ================= GUI =================
 root = tk.Tk()
@@ -150,7 +154,8 @@ entry_end.insert(0, "3")
 open_button = tk.Button(root, text="Open Tabs", font=("Arial", 14), bg="blue", fg="white", command=open_tabs)
 open_button.pack(pady=10)
 
-close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white", command=close_all_tabs)
+# Gọi close_all_tabs_thread thay vì close_all_tabs trực tiếp
+close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white", command=close_all_tabs_thread)
 close_button.pack(pady=10)
 
 text_box = tk.Text(root, height=12, width=70)
