@@ -1,18 +1,23 @@
 import subprocess
 import tkinter as tk
+from tkinter import filedialog, messagebox
 import threading
 from datetime import datetime
 from time import sleep
 import os
 import re
+import cv2
+import numpy as np
+import tempfile
 
-LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"
+LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole.exe
 GAME_PACKAGE = "vn.kvtm.js"
 ACCOUNTS_FILE = "accounts_used.txt"
 
 # Biến toàn cục quản lý account
 account_counter = 1
 account_lock = threading.Lock()
+selected_region = None  # (x1, y1, x2, y2)
 
 # ================= File Manager =================
 
@@ -66,6 +71,68 @@ def log(message):
     text_box.insert(tk.END, f"[{now}] {message}\n")
     text_box.see(tk.END)
 
+# ================= Screenshot =================
+
+def capture_screenshot_img(idx):
+    """
+    Chụp màn hình bằng 2 cách:
+      1) Thử exec-out screencap -p (trả bytes trực tiếp)
+      2) Nếu không được, fallback: shell screencap -> /sdcard/screen.png rồi pull về file tạm
+    Trả về OpenCV image (BGR numpy array) hoặc None nếu thất bại.
+    """
+    # --- 1) Thử exec-out ---
+    try:
+        cmd = [
+            LD_CONSOLE, "adb", "--index", str(idx),
+            "--command", "exec-out screencap -p"
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode == 0 and proc.stdout:
+            img_bytes = proc.stdout
+            img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if img is not None:
+                return img
+            else:
+                log(f"[LD {idx}] Không decode được ảnh từ exec-out (img is None).")
+        else:
+            err = proc.stderr.decode(errors='ignore') if proc.stderr else "no stderr"
+            log(f"[LD {idx}] exec-out không trả ảnh hợp lệ. returncode={proc.returncode}, stderr={err}")
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi khi dùng exec-out: {e}")
+
+    # --- 2) Fallback: chụp vào /sdcard và pull về file tạm ---
+    try:
+        cmd_capture = [LD_CONSOLE, "adb", "--index", str(idx),
+                       "--command", "shell screencap -p /sdcard/screen.png"]
+        proc1 = subprocess.run(cmd_capture, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc1.returncode == 0:
+            tmpf = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmpf = tmp.name
+                tmp.close()
+                cmd_pull = [LD_CONSOLE, "adb", "--index", str(idx),
+                            "--command", f"pull /sdcard/screen.png {tmpf}"]
+                proc2 = subprocess.run(cmd_pull, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if proc2.returncode == 0:
+                    img = cv2.imread(tmpf)
+                    if img is not None:
+                        return img
+                    else:
+                        log(f"[LD {idx}] Đã pull nhưng không đọc được file PNG.")
+                else:
+                    log(f"[LD {idx}] Lỗi khi pull file từ sdcard: {proc2.stderr or proc2.stdout}")
+            finally:
+                if tmpf and os.path.exists(tmpf):
+                    os.remove(tmpf)
+        else:
+            log(f"[LD {idx}] Lỗi khi chụp vào /sdcard: {proc1.stderr or proc1.stdout}")
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi fallback chụp/pull: {e}")
+
+    return None
+
 # ================= Account Manager =================
 
 def get_new_account():
@@ -99,9 +166,9 @@ def worker_instance(idx):
     # Vòng lặp xử lý (giả sử chỉ chạy 3 lần rồi kết thúc)
     sleep(10)
     for i in range(3):
-        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 470 910"])
-        log(f"[LD {idx}] ({account_name}) Tap (470,910)")
-        sleep(1)
+        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 200 200"])
+        log(f"[LD {idx}] ({account_name}) Tap (200,200)")
+        sleep(5)
 
     # Khi luồng hoàn tất → lưu account vào file
     save_account_done(account_name)
@@ -127,23 +194,28 @@ def close_all_tabs():
         for idx in instances:
             run_ldconsole(["quit", "--index", idx])
             log(f"Đã gửi lệnh tắt LDPlayer instance {idx}")
-            sleep(1)
+            sleep(5)
 
-# Chạy close_all_tabs trong thread riêng để tránh treo GUI
-def close_all_tabs_thread():
-    threading.Thread(target=close_all_tabs, daemon=True).start()
+# ================= Region Select =================
 
-# ================= Test Click =================
+def select_region(idx=1):
+    global selected_region
+    img = capture_screenshot_img(idx)
+    if img is None:
+        log("Không chụp được ảnh từ LDPlayer.")
+        return
 
-def test_click():
-    try:
-        idx = int(entry_test_index.get())
-        x = int(entry_x.get())
-        y = int(entry_y.get())
-        run_ldconsole(["adb", "--index", str(idx), "--command", f"shell input tap {x} {y}"])
-        log(f"[LD {idx}] Test Click tại ({x},{y})")
-    except ValueError:
-        log("Nhập số hợp lệ cho index, x, y!")
+    clone = img.copy()
+    r = cv2.selectROI("Chọn vùng ảnh", clone, False, False)
+    cv2.destroyWindow("Chọn vùng ảnh")
+
+    if r == (0, 0, 0, 0):
+        log("Bạn chưa chọn vùng nào.")
+        return
+
+    x, y, w, h = r
+    selected_region = (x, y, x + w, y + h)
+    log(f"Đã chọn vùng: {selected_region}")
 
 # ================= GUI =================
 root = tk.Tk()
@@ -164,32 +236,13 @@ entry_end.grid(row=0, column=3, padx=5)
 entry_end.insert(0, "3")
 
 open_button = tk.Button(root, text="Open Tabs", font=("Arial", 14), bg="blue", fg="white", command=open_tabs)
-open_button.pack(pady=5)
+open_button.pack(pady=10)
 
-close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white", command=close_all_tabs_thread)
-close_button.pack(pady=5)
+close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white", command=close_all_tabs)
+close_button.pack(pady=10)
 
-# Khung test click
-frame_test = tk.Frame(root)
-frame_test.pack(pady=10)
-
-tk.Label(frame_test, text="Index:").grid(row=0, column=0, padx=5)
-entry_test_index = tk.Entry(frame_test, width=5)
-entry_test_index.grid(row=0, column=1, padx=5)
-entry_test_index.insert(0, "1")
-
-tk.Label(frame_test, text="X:").grid(row=0, column=2, padx=5)
-entry_x = tk.Entry(frame_test, width=6)
-entry_x.grid(row=0, column=3, padx=5)
-entry_x.insert(0, "300")
-
-tk.Label(frame_test, text="Y:").grid(row=0, column=4, padx=5)
-entry_y = tk.Entry(frame_test, width=6)
-entry_y.grid(row=0, column=5, padx=5)
-entry_y.insert(0, "300")
-
-test_button = tk.Button(frame_test, text="Test Click", font=("Arial", 12), bg="green", fg="white", command=test_click)
-test_button.grid(row=0, column=6, padx=10)
+region_button = tk.Button(root, text="Chọn vùng ảnh", font=("Arial", 12), bg="green", fg="white", command=lambda: select_region(1))
+region_button.pack(pady=10)
 
 text_box = tk.Text(root, height=12, width=70)
 text_box.pack(pady=10)
