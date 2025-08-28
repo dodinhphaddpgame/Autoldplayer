@@ -1,26 +1,201 @@
-# gui.py
-# Giao diện Tkinter chính (đã chỉnh để selectROI chạy an toàn trên main thread)
-# - capture_screenshot_img chạy trong background thread
-# - cv2.selectROI và các dialog Tkinter chạy trên main thread thông qua root.after
-
-import threading
+import subprocess
 import tkinter as tk
-from tkinter import simpledialog
-
-from logger_widget import set_text_widget, log
-from ldconsole import get_instances
-from worker import worker_instance
-from screenshot import capture_screenshot_img
-from config import REGIONS_DIR
-import os
-import cv2
+from tkinter import filedialog, messagebox, simpledialog
+import threading
 from datetime import datetime
+from time import sleep
+import os
+import re
+import cv2
+import numpy as np
+import tempfile
+import glob
 
-# Biến global để có thể schedule callback từ thread khác
-root = None
-region_button = None
+LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole.exe
+GAME_PACKAGE = "vn.kvtm.js"
+ACCOUNTS_FILE = "accounts_used.txt"
+REGIONS_DIR = "regions"  # thư mục gốc chứa các thư mục category
 
-def open_tabs(entry_start, entry_end):
+# Biến toàn cục quản lý account
+account_counter = 1
+account_lock = threading.Lock()
+selected_region = None  # (x1, y1, x2, y2)
+
+# ================= File Manager =================
+
+def load_last_account():
+    """Đọc file txt để biết đã dùng đến account thứ mấy"""
+    global account_counter
+    if not os.path.exists(ACCOUNTS_FILE):
+        return
+    try:
+        with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        max_num = 0
+        for line in lines:
+            match = re.match(r"phapha(\d+)", line.strip())
+            if match:
+                num = int(match.group(1))
+                max_num = max(max_num, num)
+        account_counter = max_num + 1
+    except Exception as e:
+        print("Lỗi đọc file account:", e)
+
+def save_account_done(account_name):
+    """Ghi account đã dùng xong vào file txt"""
+    try:
+        with open(ACCOUNTS_FILE, "a", encoding="utf-8") as f:
+            f.write(account_name + "\n")
+    except Exception as e:
+        print("Lỗi ghi file account:", e)
+
+# ================= Core / utils =================
+
+def run_ldconsole(args):
+    cmd = [LD_CONSOLE] + args
+    # trả stdout text
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.stdout.strip()
+
+def get_instances():
+    output = run_ldconsole(["list2"])
+    instances = []
+    for line in output.splitlines():
+        parts = line.split(",")
+        if len(parts) >= 5 and parts[0].isdigit():
+            index = parts[0].strip()
+            status = parts[4].strip()
+            if index != "99999" and status == "1":
+                instances.append(index)
+    return instances
+
+def log(message):
+    now = datetime.now().strftime("%H:%M:%S")
+    try:
+        text_box.insert(tk.END, f"[{now}] {message}\n")
+        text_box.see(tk.END)
+    except Exception:
+        # nếu gọi trước khi text_box sẵn sàng hoặc từ thread -> print ra console
+        print(f"[{now}] {message}")
+
+# ================= Screenshot (robust) =================
+
+def _extract_png_from_bytes(bts):
+    if not bts:
+        return None
+    start = bts.find(b'\x89PNG')
+    if start == -1:
+        return None
+    end_idx = bts.rfind(b'IEND')
+    if end_idx == -1:
+        return bts[start:]
+    else:
+        return bts[start:end_idx + 8]
+
+def capture_screenshot_img(idx):
+    """
+    Thử exec-out rồi fallback pull. Trả về OpenCV BGR numpy image hoặc None.
+    """
+    # 1) exec-out
+    try:
+        cmd = [LD_CONSOLE, "adb", "--index", str(idx), "--command", "exec-out screencap -p"]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.stderr:
+            errtxt = proc.stderr.decode(errors='ignore')
+            if errtxt.strip():
+                log(f"[LD {idx}] exec-out stderr: {errtxt.strip()}")
+        out = proc.stdout
+        # nếu proc.stdout là str (text mode) -> encode
+        if isinstance(out, str):
+            out_bytes = out.encode(errors='ignore')
+        else:
+            out_bytes = out
+        png_bytes = _extract_png_from_bytes(out_bytes)
+        if png_bytes:
+            arr = np.frombuffer(png_bytes, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is not None:
+                log(f"[LD {idx}] Chụp ảnh bằng exec-out thành công.")
+                return img
+            else:
+                log(f"[LD {idx}] Không decode được ảnh từ exec-out (cv2.imdecode trả None).")
+        else:
+            log(f"[LD {idx}] exec-out không trả dữ liệu PNG hợp lệ (không tìm header).")
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi khi chạy exec-out: {e}")
+
+    # 2) fallback
+    try:
+        cmd_capture = [LD_CONSOLE, "adb", "--index", str(idx), "--command", "shell screencap -p /sdcard/screen.png"]
+        proc1 = subprocess.run(cmd_capture, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc1.returncode != 0:
+            log(f"[LD {idx}] Lỗi khi chụp vào /sdcard: {proc1.stderr or proc1.stdout}")
+        else:
+            tmpf = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmpf = tmp.name
+                tmp.close()
+                cmd_pull = [LD_CONSOLE, "adb", "--index", str(idx), "--command", f"pull /sdcard/screen.png {tmpf}"]
+                proc2 = subprocess.run(cmd_pull, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if proc2.returncode != 0:
+                    log(f"[LD {idx}] Lỗi khi pull file: {proc2.stderr or proc2.stdout}")
+                else:
+                    img = cv2.imread(tmpf)
+                    if img is None:
+                        log(f"[LD {idx}] Đã pull file nhưng cv2.imread trả None.")
+                    else:
+                        log(f"[LD {idx}] Chụp và pull file thành công.")
+                        return img
+            finally:
+                if tmpf and os.path.exists(tmpf):
+                    try:
+                        os.remove(tmpf)
+                    except Exception:
+                        pass
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi fallback chụp/pull: {e}")
+
+    return None
+
+# ================= Account Manager =================
+
+def get_new_account():
+    global account_counter
+    with account_lock:
+        acc_name = f"phapha{account_counter}"
+        account_counter += 1
+    return acc_name
+
+# ================= Per-Instance Worker =================
+
+def worker_instance(idx):
+    log(f"[LD {idx}] Bắt đầu quản lý instance...")
+    account_name = get_new_account()
+    log(f"[LD {idx}] Gán account: {account_name}")
+
+    run_ldconsole(["launch", "--index", str(idx)])
+    log(f"[LD {idx}] Đã mở LDPlayer instance")
+
+    sleep(15)
+    run_ldconsole([
+        "adb", "--index", str(idx),
+        "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    ])
+    log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
+
+    sleep(10)
+    for i in range(3):
+        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 200 200"])
+        log(f"[LD {idx}] ({account_name}) Tap (200,200)")
+        sleep(5)
+
+    save_account_done(account_name)
+    log(f"[LD {idx}] Hoàn thành công việc với {account_name}, đã lưu vào file.")
+
+# ================= Control =================
+
+def open_tabs():
     try:
         start_idx = int(entry_start.get())
         end_idx = int(entry_end.get())
@@ -36,108 +211,191 @@ def close_all_tabs():
             log("Tất cả tab đã được tắt.")
             break
         for idx in instances:
-            from ldconsole import run_ldconsole
             run_ldconsole(["quit", "--index", idx])
             log(f"Đã gửi lệnh tắt LDPlayer instance {idx}")
-        import time
-        time.sleep(5)
+            sleep(5)
 
-# ---------- Chọn vùng (safe: capture trong background, dialog/ROI trên main thread) ----------
+# ================= Template matching helpers =================
 
-def select_region_start(idx=1):
+def find_template_on_screen(idx, template_path, threshold=0.85, search_region=None):
     """
-    Bắt đầu quy trình chọn vùng:
-    - Hỏi category bằng simpledialog (phải chạy trên main thread)
-    - Nếu user OK -> spawn background thread để capture ảnh
+    Chụp màn từ LDPlayer idx, tìm template_path.
+    Trả về (found, max_val, rect) where rect=(x1,y1,x2,y2) in screen coords.
     """
-    global region_button
-    # Hỏi category trên main thread (an toàn)
-    category = simpledialog.askstring("Category", "Nhập tên category (ví dụ: login, clickimage):", initialvalue="default")
+    img = capture_screenshot_img(idx)
+    if img is None:
+        log(f"[LD {idx}] Không chụp được ảnh để dò template.")
+        return (False, 0.0, None)
+
+    search_img = img
+    offset_x = offset_y = 0
+    if search_region:
+        x1, y1, x2, y2 = map(int, search_region)
+        # clamp
+        x1 = max(0, min(search_img.shape[1]-1, x1))
+        x2 = max(0, min(search_img.shape[1], x2))
+        y1 = max(0, min(search_img.shape[0]-1, y1))
+        y2 = max(0, min(search_img.shape[0], y2))
+        if x2 <= x1 or y2 <= y1:
+            log(f"[LD {idx}] search_region không hợp lệ: {search_region}")
+            return (False, 0.0, None)
+        search_img = img[y1:y2, x1:x2]
+        offset_x, offset_y = x1, y1
+
+    tpl = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    if tpl is None:
+        log(f"[LD {idx}] Không đọc được template: {template_path}")
+        return (False, 0.0, None)
+
+    if tpl.shape[0] > search_img.shape[0] or tpl.shape[1] > search_img.shape[1]:
+        # template to hơn vùng tìm -> skip
+        return (False, 0.0, None)
+
+    try:
+        res = cv2.matchTemplate(search_img, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        top_left = max_loc
+        h, w = tpl.shape[:2]
+        x1m = int(top_left[0] + offset_x)
+        y1m = int(top_left[1] + offset_y)
+        x2m = x1m + w
+        y2m = y1m + h
+        found = (max_val >= threshold)
+        return (found, float(max_val), (x1m, y1m, x2m, y2m))
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi khi match template {os.path.basename(template_path)}: {e}")
+        return (False, 0.0, None)
+
+def tap_center_of_rect(idx, rect):
+    x1,y1,x2,y2 = rect
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    run_ldconsole(["adb", "--index", str(idx), "--command", f"shell input tap {cx} {cy}"])
+    log(f"[LD {idx}] Tap tại ({cx},{cy})")
+
+def find_and_act_category(idx, category, threshold=0.85, search_region=None, first_only=True, do_tap=True):
+    """
+    Dò các ảnh trong regions/<category> theo thứ tự file.
+    Nếu first_only True -> dừng ở template đầu tìm thấy.
+    Trả về info dict nếu tìm thấy (template, score, rect) hoặc None.
+    """
+    folder = os.path.join(REGIONS_DIR, category)
+    if not os.path.isdir(folder):
+        log(f"Folder category không tồn tại: {folder}")
+        return None
+
+    templates = sorted(glob.glob(os.path.join(folder, "*.*")))
+    if not templates:
+        log(f"Category {category} rỗng: {folder}")
+        return None
+
+    for tpl in templates:
+        found, score, rect = find_template_on_screen(idx, tpl, threshold=threshold, search_region=search_region)
+        log(f"[LD {idx}] Template {os.path.basename(tpl)} -> score={score:.3f} found={found}")
+        if found:
+            info = {"template": tpl, "score": score, "rect": rect}
+            if do_tap:
+                try:
+                    tap_center_of_rect(idx, rect)
+                except Exception as e:
+                    log(f"[LD {idx}] Lỗi tap: {e}")
+            if first_only:
+                return info
+    return None
+
+# -------------------------------
+# Watcher (polling) để tự động dò
+# -------------------------------
+_watch_threads = {}  # map key -> {"thread":..., "stop":Event}
+
+def start_watch_category(idx, category, threshold=0.88, interval_sec=3, search_region=None, do_tap=True):
+    key = f"{idx}:{category}"
+    if key in _watch_threads:
+        log(f"Watcher đã chạy cho {key}")
+        return
+    stop_flag = threading.Event()
+    def worker():
+        log(f"Watcher bắt đầu cho LD{idx} category={category} interval={interval_sec}s threshold={threshold}")
+        while not stop_flag.is_set():
+            res = find_and_act_category(idx, category, threshold=threshold, search_region=search_region, first_only=True, do_tap=do_tap)
+            if res:
+                log(f"[Watcher {key}] Tìm thấy {os.path.basename(res['template'])} score={res['score']:.3f} tại {res['rect']}")
+            stop_flag.wait(interval_sec)
+        log(f"Watcher dừng cho {key}")
+    th = threading.Thread(target=worker, daemon=True)
+    _watch_threads[key] = {"thread": th, "stop": stop_flag}
+    th.start()
+
+def stop_watch_category(idx, category):
+    key = f"{idx}:{category}"
+    info = _watch_threads.get(key)
+    if not info:
+        log(f"Không có watcher cho {key}")
+        return
+    info["stop"].set()
+    del _watch_threads[key]
+    log(f"Đã gửi lệnh dừng watcher cho {key}")
+
+# ================= Region Select (cv2.selectROI) + Save images into category folders =================
+
+# helper: gọi simpledialog.askstring trên luồng chính bằng root.after và trả về kết quả
+def ask_category_on_main(initial="default"):
+    result = {"value": None}
+    evt = threading.Event()
+
+    def _ask():
+        try:
+            result["value"] = simpledialog.askstring("Category",
+                                                     "Nhập tên category (ví dụ: login, clickimage):",
+                                                     initialvalue=initial)
+        except Exception:
+            result["value"] = None
+        finally:
+            evt.set()
+
+    # schedule gọi trên luồng chính
+    root.after(0, _ask)
+    # chờ cho tới khi người dùng nhập hoặc huỷ
+    evt.wait()
+    return result["value"]
+
+
+# Thay thế hàm select_region cũ bằng hàm này
+def select_region(idx=1):
+    """
+    Chụp ảnh, mở cv2.selectROI để chọn vùng.
+    Sau khi chọn, chỉ lưu ảnh ROI (không lưu tọa độ) vào thư mục:
+      regions/<category>/...
+    Lưu ý: dialog nhập category sẽ được gọi trên luồng chính (sử dụng ask_category_on_main).
+    """
+    global selected_region
+
+    # gọi dialog trên main thread để tránh TclError
+    category = ask_category_on_main(initial="default")
     if category is None:
         log("Đã hủy (không nhập category).")
         return
     category = category.strip() or "default"
 
-    try:
-        # disable nút tránh bấm nhiều lần trong khi đang capture
-        if region_button is not None:
-            region_button.config(state='disabled')
-    except Exception:
-        pass
-
     log(f"Đang chụp màn hình LDPlayer {idx} (category={category})...")
-
-    # Start background thread để capture (không block GUI)
-    threading.Thread(target=_select_region_capture_thread, args=(idx, category), daemon=True).start()
-
-
-def _select_region_capture_thread(idx, category):
-    """
-    Chạy trong background: lấy ảnh từ LDPlayer rồi schedule xử lý ROI trên main thread.
-    Nếu không lấy được ảnh sẽ log và re-enable nút.
-    """
-    global root, region_button
     img = capture_screenshot_img(idx)
     if img is None:
         log("Không chụp được ảnh từ LDPlayer.")
-        # re-enable nút trên main thread
-        try:
-            if root:
-                root.after(0, lambda: region_button.config(state='normal') if region_button else None)
-        except Exception:
-            pass
         return
 
-    # Schedule hàm xử lý ROI trên main thread
-    try:
-        if root:
-            root.after(0, lambda: _show_roi_on_main_thread(img, idx, category))
-        else:
-            # nếu root chưa sẵn sàng (hiếm), xử lý trực tiếp (giữ an toàn)
-            _show_roi_on_main_thread(img, idx, category)
-    except Exception as e:
-        log(f"Lỗi schedule ROI trên main thread: {e}")
-        try:
-            if root:
-                root.after(0, lambda: region_button.config(state='normal') if region_button else None)
-        except Exception:
-            pass
-
-
-def _show_roi_on_main_thread(img, idx, category):
-    """
-    Hàm chạy trên main thread: mở cv2.selectROI, lưu ROI, hiển thị xác nhận,
-    và re-enable nút chọn vùng.
-    """
-    global region_button
-    try:
-        clone = img.copy()
-        # cv2.selectROI cần chạy trên luồng chính để GUI OpenCV hoạt động ổn định
-        r = cv2.selectROI("Chọn vùng ảnh (Enter: xác nhận, Esc: hủy)", clone, False, False)
-        cv2.destroyAllWindows()
-    except Exception as e:
-        log(f"Lỗi khi mở cửa sổ chọn vùng: {e}")
-        # bật lại nút
-        try:
-            if region_button:
-                region_button.config(state='normal')
-        except Exception:
-            pass
-        return
+    clone = img.copy()
+    # cv2.selectROI có thể mở cửa sổ riêng; vẫn gọi nó ở thread con (như trước)
+    r = cv2.selectROI("Chọn vùng ảnh (Enter: xác nhận, Esc: hủy)", clone, False, False)
+    cv2.destroyAllWindows()
 
     if r == (0, 0, 0, 0):
         log("Bạn chưa chọn vùng nào.")
-        try:
-            if region_button:
-                region_button.config(state='normal')
-        except Exception:
-            pass
         return
 
     x, y, w, h = r
     x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
+    selected_region = (x1, y1, x2, y2)
 
-    # tạo thư mục lưu theo category
     os.makedirs(REGIONS_DIR, exist_ok=True)
     category_dir = os.path.join(REGIONS_DIR, category)
     os.makedirs(category_dir, exist_ok=True)
@@ -153,7 +411,7 @@ def _show_roi_on_main_thread(img, idx, category):
     except Exception as e:
         log(f"Lỗi lưu ROI image: {e}")
 
-    # Hiển thị vùng đã chọn để xác nhận (vẽ khung xanh, hiện 1s)
+    # hiển thị vùng đã chọn để xác nhận (vẽ khung xanh, hiện 1s)
     try:
         disp = img.copy()
         cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 0), 3)
@@ -163,68 +421,110 @@ def _show_roi_on_main_thread(img, idx, category):
     except Exception:
         pass
 
-    # Bật lại nút chọn vùng
+
+# ================= GUI =================
+root = tk.Tk()
+root.title("LDPlayer Auto Controller")
+root.geometry("760x640")
+
+frame_range = tk.Frame(root)
+frame_range.pack(pady=5)
+
+tk.Label(frame_range, text="Start index:").grid(row=0, column=0, padx=5)
+entry_start = tk.Entry(frame_range, width=5)
+entry_start.grid(row=0, column=1, padx=5)
+entry_start.insert(0, "1")
+
+tk.Label(frame_range, text="End index:").grid(row=0, column=2, padx=5)
+entry_end = tk.Entry(frame_range, width=5)
+entry_end.grid(row=0, column=3, padx=5)
+entry_end.insert(0, "3")
+
+open_button = tk.Button(frame_range, text="Open Tabs", font=("Arial", 12), bg="blue", fg="white", command=open_tabs)
+open_button.grid(row=0, column=4, padx=8)
+
+close_button = tk.Button(frame_range, text="Close All Tabs", font=("Arial", 12), bg="red", fg="white",
+                         command=lambda: threading.Thread(target=close_all_tabs, daemon=True).start())
+close_button.grid(row=0, column=5, padx=8)
+
+# region controls
+frame_region = tk.Frame(root)
+frame_region.pack(pady=8)
+
+tk.Label(frame_region, text="Index chọn vùng:").grid(row=0, column=0, padx=5)
+entry_region_index = tk.Entry(frame_region, width=6)
+entry_region_index.grid(row=0, column=1, padx=5)
+entry_region_index.insert(0, "1")
+
+region_button = tk.Button(frame_region, text="Chọn & Lưu vùng (index)", font=("Arial", 12), bg="green", fg="white",
+                          command=lambda: threading.Thread(target=select_region, args=(int(entry_region_index.get()),), daemon=True).start())
+region_button.grid(row=0, column=2, padx=6)
+
+# match controls (mới)
+frame_match = tk.Frame(root)
+frame_match.pack(pady=6)
+
+tk.Label(frame_match, text="Category:").grid(row=0, column=0, padx=4)
+entry_match_category = tk.Entry(frame_match, width=18)
+entry_match_category.grid(row=0, column=1, padx=4)
+entry_match_category.insert(0, "default")
+
+tk.Label(frame_match, text="Threshold:").grid(row=0, column=2, padx=4)
+entry_threshold = tk.Entry(frame_match, width=6)
+entry_threshold.grid(row=0, column=3, padx=4)
+entry_threshold.insert(0, "0.88")
+
+tk.Label(frame_match, text="Interval(s):").grid(row=0, column=4, padx=4)
+entry_interval = tk.Entry(frame_match, width=6)
+entry_interval.grid(row=0, column=5, padx=4)
+entry_interval.insert(0, "3")
+
+def on_check_once():
     try:
-        if region_button:
-            region_button.config(state='normal')
-    except Exception:
-        pass
+        idx = int(entry_region_index.get())
+        cat = entry_match_category.get().strip()
+        thresh = float(entry_threshold.get())
+        res = find_and_act_category(idx, cat, threshold=thresh, first_only=True, do_tap=True)
+        if res:
+            log(f"[Manual] Found {os.path.basename(res['template'])} score={res['score']:.3f}")
+        else:
+            log("[Manual] Không tìm thấy template nào.")
+    except Exception as e:
+        log(f"Lỗi check once: {e}")
 
-# ---------------------------------------------------------------------------------------------
+def on_start_watch():
+    try:
+        idx = int(entry_region_index.get())
+        cat = entry_match_category.get().strip()
+        thresh = float(entry_threshold.get())
+        interval = float(entry_interval.get())
+        # sử dụng selected_region nếu bạn đã chọn vùng trước đó; nếu None -> toàn màn
+        start_watch_category(idx, cat, threshold=thresh, interval_sec=interval, search_region=selected_region, do_tap=True)
+    except Exception as e:
+        log(f"Lỗi start watch: {e}")
 
+def on_stop_watch():
+    try:
+        idx = int(entry_region_index.get())
+        cat = entry_match_category.get().strip()
+        stop_watch_category(idx, cat)
+    except Exception as e:
+        log(f"Lỗi stop watch: {e}")
 
-def build_gui():
-    """
-    Xây dựng GUI chính và đăng ký text widget cho logger.
-    Ghi chú: khai báo global root để có thể schedule root.after(...) từ các thread.
-    """
-    global root, region_button
-    root = tk.Tk()
-    root.title("LDPlayer Auto Controller")
-    root.geometry("640x520")
+btn_check = tk.Button(frame_match, text="Check Once", command=on_check_once, bg="#6fa")
+btn_check.grid(row=1, column=0, columnspan=2, pady=4, padx=6)
 
-    frame_range = tk.Frame(root)
-    frame_range.pack(pady=5)
+btn_watch_start = tk.Button(frame_match, text="Start Watch", command=on_start_watch, bg="#a6f")
+btn_watch_start.grid(row=1, column=2, columnspan=2, pady=4, padx=6)
 
-    tk.Label(frame_range, text="Start index:").grid(row=0, column=0, padx=5)
-    entry_start = tk.Entry(frame_range, width=5)
-    entry_start.grid(row=0, column=1, padx=5)
-    entry_start.insert(0, "1")
+btn_watch_stop = tk.Button(frame_match, text="Stop Watch", command=on_stop_watch, bg="#f66")
+btn_watch_stop.grid(row=1, column=4, columnspan=2, pady=4, padx=6)
 
-    tk.Label(frame_range, text="End index:").grid(row=0, column=2, padx=5)
-    entry_end = tk.Entry(frame_range, width=5)
-    entry_end.grid(row=0, column=3, padx=5)
-    entry_end.insert(0, "3")
+# text log
+text_box = tk.Text(root, height=20, width=100)
+text_box.pack(pady=10)
 
-    open_button = tk.Button(root, text="Open Tabs", font=("Arial", 14), bg="blue", fg="white",
-                            command=lambda: open_tabs(entry_start, entry_end))
-    open_button.pack(pady=8)
+# Khi mở app → đọc file để set counter
+load_last_account()
 
-    close_button = tk.Button(root, text="Close All Tabs", font=("Arial", 14), bg="red", fg="white",
-                             command=lambda: threading.Thread(target=close_all_tabs, daemon=True).start())
-    close_button.pack(pady=4)
-
-    frame_region = tk.Frame(root)
-    frame_region.pack(pady=8)
-
-    tk.Label(frame_region, text="Index chọn vùng:").grid(row=0, column=0, padx=5)
-    entry_region_index = tk.Entry(frame_region, width=6)
-    entry_region_index.grid(row=0, column=1, padx=5)
-    entry_region_index.insert(0, "1")
-
-    # nút gọi select_region_start (không spawn thread ở đây)
-    region_button = tk.Button(frame_region, text="Chọn & Lưu vùng (index)", font=("Arial", 12), bg="green", fg="white",
-                              command=lambda: select_region_start(int(entry_region_index.get())))
-    region_button.grid(row=0, column=2, padx=6)
-
-    text_box = tk.Text(root, height=18, width=80)
-    text_box.pack(pady=10)
-
-    # đăng ký text widget để logger dùng
-    set_text_widget(text_box)
-
-    root.mainloop()
-
-
-if __name__ == '__main__':
-    build_gui()
+root.mainloop()
