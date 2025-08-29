@@ -185,13 +185,32 @@ def worker_instance(idx):
     log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
 
     sleep(10)
-    for i in range(3):
-        run_ldconsole(["adb", "--index", str(idx), "--command", "shell input tap 200 200"])
-        log(f"[LD {idx}] ({account_name}) Tap (200,200)")
-        sleep(5)
+    click_if_found(idx,template_path="regions/default/default_idx1_20250828_012113.png")
 
     save_account_done(account_name)
     log(f"[LD {idx}] Hoàn thành công việc với {account_name}, đã lưu vào file.")
+
+def click_if_found(idx, template_path, threshold=0.85, search_region=None):
+    """
+    Nếu template xuất hiện thì tap vào giữa template đó.
+    """
+    found, score, rect = find_template_on_screen(idx, template_path, threshold, search_region)
+    if found and rect:
+        x1, y1, x2, y2 = rect
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        try:
+            run_ldconsole([
+                "adb", "--index", str(idx),
+                "--command", f"shell input tap {cx} {cy}"
+            ])
+            log(f"[LD {idx}] Click vào {template_path} tại ({cx},{cy}), score={score:.3f}")
+            return True
+        except Exception as e:
+            log(f"[LD {idx}] Lỗi khi click: {e}")
+    else:
+        log(f"[LD {idx}] Không tìm thấy {template_path} (score={score:.3f})")
+    return False
 
 # ================= Control =================
 
