@@ -11,7 +11,7 @@ import numpy as np
 import tempfile
 import glob
 
-LD_CONSOLE = r"C:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole.exe
+LD_CONSOLE = r"D:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole.exe
 GAME_PACKAGE = "vn.kvtm.js"
 ACCOUNTS_FILE = "accounts_used.txt"
 REGIONS_DIR = "regions"  # thư mục gốc chứa các thư mục category
