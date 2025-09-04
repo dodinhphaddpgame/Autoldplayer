@@ -15,6 +15,7 @@ LD_CONSOLE = r"D:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole
 GAME_PACKAGE = "vn.kvtm.js"
 ACCOUNTS_FILE = "accounts_used.txt"
 REGIONS_DIR = "regions"  # thư mục gốc chứa các thư mục category
+passwork = "pppppp"
 
 # Biến toàn cục quản lý account
 account_counter = 1
@@ -51,11 +52,23 @@ def save_account_done(account_name):
 
 # ================= Core / utils =================
 
-def run_ldconsole(args):
-    cmd = [LD_CONSOLE] + args
+#def run_ldconsole(args):
+    #cmd = [LD_CONSOLE] + args
     # trả stdout text
+    #result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    #return result.stdout.strip()
+
+def run_ldconsole(args):
+    cmd = [LD_CONSOLE]
+    if "--command" in args:
+        pos = args.index("--command")
+        # Ghép tất cả sau --command thành một chuỗi duy nhất
+        cmd += args[:pos+1] + [" ".join(args[pos+1:])]
+    else:
+        cmd += args
+
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return result.stdout.strip()
+    return (result.stdout + result.stderr).strip()
 
 def get_instances():
     output = run_ldconsole(["list2"])
@@ -96,33 +109,33 @@ def capture_screenshot_img(idx):
     """
     Thử exec-out rồi fallback pull. Trả về OpenCV BGR numpy image hoặc None.
     """
-    # 1) exec-out
-    try:
-        cmd = [LD_CONSOLE, "adb", "--index", str(idx), "--command", "exec-out screencap -p"]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if proc.stderr:
-            errtxt = proc.stderr.decode(errors='ignore')
-            if errtxt.strip():
-                log(f"[LD {idx}] exec-out stderr: {errtxt.strip()}")
-        out = proc.stdout
-        # nếu proc.stdout là str (text mode) -> encode
-        if isinstance(out, str):
-            out_bytes = out.encode(errors='ignore')
-        else:
-            out_bytes = out
-        png_bytes = _extract_png_from_bytes(out_bytes)
-        if png_bytes:
-            arr = np.frombuffer(png_bytes, dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is not None:
-                log(f"[LD {idx}] Chụp ảnh bằng exec-out thành công.")
-                return img
-            else:
-                log(f"[LD {idx}] Không decode được ảnh từ exec-out (cv2.imdecode trả None).")
-        else:
-            log(f"[LD {idx}] exec-out không trả dữ liệu PNG hợp lệ (không tìm header).")
-    except Exception as e:
-        log(f"[LD {idx}] Lỗi khi chạy exec-out: {e}")
+    # # 1) exec-out
+    # try:
+    #     cmd = [LD_CONSOLE, "adb", "--index", str(idx), "--command", "exec-out screencap -p"]
+    #     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #     if proc.stderr:
+    #         errtxt = proc.stderr.decode(errors='ignore')
+    #         if errtxt.strip():
+    #             log(f"[LD {idx}] exec-out stderr: {errtxt.strip()}")
+    #     out = proc.stdout
+    #     # nếu proc.stdout là str (text mode) -> encode
+    #     if isinstance(out, str):
+    #         out_bytes = out.encode(errors='ignore')
+    #     else:
+    #         out_bytes = out
+    #     png_bytes = _extract_png_from_bytes(out_bytes)
+    #     if png_bytes:
+    #         arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    #         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    #         if img is not None:
+    #             log(f"[LD {idx}] Chụp ảnh bằng exec-out thành công.")
+    #             return img
+    #         else:
+    #             log(f"[LD {idx}] Không decode được ảnh từ exec-out (cv2.imdecode trả None).")
+    #     else:
+    #         log(f"[LD {idx}] exec-out không trả dữ liệu PNG hợp lệ (không tìm header).")
+    # except Exception as e:
+    #     log(f"[LD {idx}] Lỗi khi chạy exec-out: {e}")
 
     # 2) fallback
     try:
@@ -174,18 +187,97 @@ def worker_instance(idx):
     account_name = get_new_account()
     log(f"[LD {idx}] Gán account: {account_name}")
 
-    run_ldconsole(["launch", "--index", str(idx)])
-    log(f"[LD {idx}] Đã mở LDPlayer instance")
+    #run_ldconsole(["launch", "--index", str(idx)])
+    #log(f"[LD {idx}] Đã mở LDPlayer instance")
 
-    sleep(15)
+    #sleep(30)
+    #run_ldconsole([
+    #    "adb", "--index", str(idx),
+    #    "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    #])
+    #run_ldconsole([
+    #    "adb", "--index", str(idx),
+    #    "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    #])
+    #log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
+
+    #sleep(12)  # đợi game load
+    click_if_found(idx, template_path="regions/login/login_1_20250828_012113.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_2_20250829_072148.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_3_20250829_072210.png")
+
+    sleep(1)
+    if found_image(idx, template_path="regions/login/login_5_20250904_144633.png"):
+        sleep(1)
+    else:
+        sleep(1)
+        click_if_found(idx, template_path="regions/login/login_4_20250829_072231.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_7_20250904_160740.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_8_20250904_160924.png")
+
+    sleep(1)
     run_ldconsole([
         "adb", "--index", str(idx),
-        "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+        "--command", f"shell input text {account_name}"
     ])
-    log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
 
-    sleep(10)
-    click_if_found(idx,template_path="regions/default/default_idx1_20250828_012113.png")
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_9_20250904_160947.png")
+
+    sleep(1)
+    run_ldconsole([
+        "adb", "--index", str(idx),
+        "--command", f"shell input text {passwork}"
+    ])
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_10_20250904_161023.png")
+
+    sleep(1)
+    run_ldconsole([
+        "adb", "--index", str(idx),
+        "--command", f"shell input text {passwork}"
+    ])
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_11_20250904_161049.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_12_20250904_162724.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_13_20250904_162938.png")
+
+    sleep(1)
+    click_if_found(idx, template_path="regions/login/login_14_20250904_163118.png")
+
+    # sleep(1)
+    # run_ldconsole([
+    #     "adb", "--index", str(idx),
+    #     "--command", "shell input keyevent 123"  # 123 = KEYCODE_MOVE_END
+    # ])
+    # for _ in range(10):  # giả sử tên tối đa 20 ký tự
+    #     run_ldconsole([
+    #         "adb", "--index", str(idx),
+    #         "--command", "shell input keyevent 67"  # 67 = KEYCODE_DEL
+    #     ])
+    #
+    # sleep(1)
+    # run_ldconsole([
+    #     "adb", "--index", str(idx),
+    #     "--command", f"shell input text {account_name}"
+    # ])
+    #
+    # sleep(1)
+    # click_if_found(idx, template_path="regions/login/login_5_20250904_144633.png")
 
     save_account_done(account_name)
     log(f"[LD {idx}] Hoàn thành công việc với {account_name}, đã lưu vào file.")
@@ -211,6 +303,10 @@ def click_if_found(idx, template_path, threshold=0.85, search_region=None):
     else:
         log(f"[LD {idx}] Không tìm thấy {template_path} (score={score:.3f})")
     return False
+
+def found_image(idx, template_path, threshold=0.85, search_region=None):
+    found, score, rect = find_template_on_screen(idx, template_path, threshold, search_region)
+    return found
 
 # ================= Control =================
 
@@ -457,7 +553,7 @@ entry_start.insert(0, "1")
 tk.Label(frame_range, text="End index:").grid(row=0, column=2, padx=5)
 entry_end = tk.Entry(frame_range, width=5)
 entry_end.grid(row=0, column=3, padx=5)
-entry_end.insert(0, "3")
+entry_end.insert(0, "1")
 
 open_button = tk.Button(frame_range, text="Open Tabs", font=("Arial", 12), bg="blue", fg="white", command=open_tabs)
 open_button.grid(row=0, column=4, padx=8)
