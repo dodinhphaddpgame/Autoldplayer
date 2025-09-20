@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import tempfile
 import glob
+import time
 
 LD_CONSOLE = r"D:\LDPlayer\LDPlayer9\ldconsole.exe"  # Đường dẫn ldconsole.exe
 GAME_PACKAGE = "vn.kvtm.js"
@@ -182,84 +183,64 @@ def get_new_account():
 
 # ================= Per-Instance Worker =================
 
+def login(idx):
+    # log(f"[LD {idx}] Bắt đầu quản lý instance...")
+    # account_name = get_new_account()
+    # log(f"[LD {idx}] Gán account: {account_name}")
+
+    run_ldconsole(["launch", "--index", str(idx)])
+    log(f"[LD {idx}] Đang mở LDPlayer instance")
+
+    sleep(30)
+    run_ldconsole([
+       "adb", "--index", str(idx),
+       "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    ])
+    run_ldconsole([
+       "adb", "--index", str(idx),
+       "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
+    ])
+    log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
+
+    sleep(12)  # đợi game load
+    click_if_found_until_gone(idx, template_path="regions/login/login_1_20250916_185037.png")
+
+    sleep(1)
+    click_if_found_until_gone(idx, template_path="regions/login/login_2_20250916_185057.png")
+    sleep(5)
+
+def kiemtragoc(idx):
+    if found_image(idx, template_path="regions/kiemtragoc/1.png"):
+        return True
+    else :
+        return False
+
+def autotrongcay(idx):
+    if found_image(idx, template_path="regions/kiemtragoc/2.png", search_region=(663, 540, 740, 597)):
+        sleep(0.2)
+        click(idx,toadoclick=(298, 738))
+        sleep(0.2)
+
+        # kiểm tra presence
+        # chạy thử
+        #swipe_path(4, [(271, 625), (296, 734), (653, 729)])
+        #ok, info = swipe_three_points_sendevent(4, (271, 625), (296, 734), (653, 729), total_ms=800,
+        #                                        steps_per_segment=8, debug=True)
+        #print(ok, info)
+
+        #swipe_path_fast(idx, [(271, 625), (296, 734), (653, 729)])
+        #swipe(idx, (271, 625), (296, 734), sleep_after=0.0)
+        #swipe(idx, (296, 734), (653, 729), sleep_after=0.5)
+        #swipe_path_fast(idx, point=[(271, 625),(296, 734)], total_duration_ms=1000)
+
 def worker_instance(idx):
     log(f"[LD {idx}] Bắt đầu quản lý instance...")
     account_name = get_new_account()
     log(f"[LD {idx}] Gán account: {account_name}")
-
-    #run_ldconsole(["launch", "--index", str(idx)])
-    #log(f"[LD {idx}] Đã mở LDPlayer instance")
-
-    #sleep(30)
-    #run_ldconsole([
-    #    "adb", "--index", str(idx),
-    #    "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
-    #])
-    #run_ldconsole([
-    #    "adb", "--index", str(idx),
-    #    "--command", f"shell monkey -p {GAME_PACKAGE} -c android.intent.category.LAUNCHER 1"
-    #])
-    #log(f"[LD {idx}] Đã mở game {GAME_PACKAGE}")
-
-    #sleep(12)  # đợi game load
-    click_if_found(idx, template_path="regions/login/login_1_20250828_012113.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_2_20250829_072148.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_3_20250829_072210.png")
-
-    sleep(1)
-    if found_image(idx, template_path="regions/login/login_5_20250904_144633.png"):
-        sleep(1)
-    else:
-        sleep(1)
-        click_if_found(idx, template_path="regions/login/login_4_20250829_072231.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_7_20250904_160740.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_8_20250904_160924.png")
-
-    sleep(1)
-    run_ldconsole([
-        "adb", "--index", str(idx),
-        "--command", f"shell input text {account_name}"
-    ])
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_9_20250904_160947.png")
-
-    sleep(1)
-    run_ldconsole([
-        "adb", "--index", str(idx),
-        "--command", f"shell input text {passwork}"
-    ])
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_10_20250904_161023.png")
-
-    sleep(1)
-    run_ldconsole([
-        "adb", "--index", str(idx),
-        "--command", f"shell input text {passwork}"
-    ])
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_11_20250904_161049.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_12_20250904_162724.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_13_20250904_162938.png")
-
-    sleep(1)
-    click_if_found(idx, template_path="regions/login/login_14_20250904_163118.png")
-
-    # sleep(1)
+    #login(idx)
+    sleep(0.2)
+    autotrongcay(idx)
+    sleep(0.2)
     # run_ldconsole([
     #     "adb", "--index", str(idx),
     #     "--command", "shell input keyevent 123"  # 123 = KEYCODE_MOVE_END
@@ -282,7 +263,20 @@ def worker_instance(idx):
     save_account_done(account_name)
     log(f"[LD {idx}] Hoàn thành công việc với {account_name}, đã lưu vào file.")
 
-def click_if_found(idx, template_path, threshold=0.85, search_region=None):
+
+def click(idx,toadoclick):
+    # Click
+    cx, cy = map(int, toadoclick)
+    try:
+        run_ldconsole([
+            "adb", "--index", str(idx),
+            "--command", f"shell input tap {cx} {cy}"
+        ])
+        log(f"[LD {idx}] Click tại ({cx},{cy})")
+    except Exception as e:
+        log(f"[LD {idx}] Lỗi click: {e}")
+
+def click_if_found(idx, template_path, threshold=0.97, search_region=None):
     """
     Nếu template xuất hiện thì tap vào giữa template đó.
     """
@@ -302,6 +296,68 @@ def click_if_found(idx, template_path, threshold=0.85, search_region=None):
             log(f"[LD {idx}] Lỗi khi click: {e}")
     else:
         log(f"[LD {idx}] Không tìm thấy {template_path} (score={score:.3f})")
+    return False
+
+def click_if_found_until_gone(
+    idx,
+    template_path,
+    threshold=0.97,
+    search_region=None,
+    timeout=10.0,
+    max_attempts=6,
+    check_interval=1.5,
+):
+    """
+    Tìm template, nếu thấy thì click vào tâm.
+    Sau đó kiểm tra lại: nếu template vẫn còn thì click lại.
+    Lặp cho tới khi biến mất hoặc hết timeout/số lần thử.
+    Trả về True nếu thành công, False nếu không.
+    """
+    start_time = time.time()
+    attempts = 0
+
+    while time.time() - start_time < timeout and attempts < max_attempts:
+        found, score, rect = find_template_on_screen(idx, template_path, threshold, search_region)
+
+        if not found:
+            log(f"[LD {idx}] Không tìm thấy {template_path} (score={score:.3f}), chờ {check_interval}s...")
+            time.sleep(check_interval)
+            continue
+
+        if rect:
+            x1, y1, x2, y2 = rect
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+        else:
+            log(f"[LD {idx}] Tìm thấy {template_path} nhưng rect=None")
+            time.sleep(check_interval)
+            continue
+
+        # Click
+        try:
+            run_ldconsole([
+                "adb", "--index", str(idx),
+                "--command", f"shell input tap {cx} {cy}"
+            ])
+            log(f"[LD {idx}] Click {template_path} tại ({cx},{cy}), score={score:.3f}, attempt {attempts+1}")
+        except Exception as e:
+            log(f"[LD {idx}] Lỗi click: {e}")
+            attempts += 1
+            time.sleep(check_interval)
+            continue
+
+        # Đợi rồi kiểm tra lại
+        time.sleep(check_interval)
+        found_after, score_after, _ = find_template_on_screen(idx, template_path, threshold, search_region)
+
+        if not found_after:
+            log(f"[LD {idx}] {template_path} đã biến mất sau click.")
+            return True
+
+        attempts += 1
+        log(f"[LD {idx}] {template_path} vẫn còn sau click (score={score_after:.3f}), thử lại ({attempts}/{max_attempts})...")
+
+    log(f"[LD {idx}] Không thể làm biến mất {template_path} sau {attempts} lần trong {timeout:.1f}s.")
     return False
 
 def found_image(idx, template_path, threshold=0.85, search_region=None):
@@ -332,7 +388,7 @@ def close_all_tabs():
 
 # ================= Template matching helpers =================
 
-def find_template_on_screen(idx, template_path, threshold=0.85, search_region=None):
+def find_template_on_screen(idx, template_path, threshold=0.98, search_region=None):
     """
     Chụp màn từ LDPlayer idx, tìm template_path.
     Trả về (found, max_val, rect) where rect=(x1,y1,x2,y2) in screen coords.
@@ -486,7 +542,7 @@ def select_region(idx=1):
     global selected_region
 
     # gọi dialog trên main thread để tránh TclError
-    category = ask_category_on_main(initial="default")
+    category = ask_category_on_main(initial="kiemtragoc")
     if category is None:
         log("Đã hủy (không nhập category).")
         return
@@ -511,6 +567,10 @@ def select_region(idx=1):
     x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
     selected_region = (x1, y1, x2, y2)
 
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    midselected_region = (cx, cy)
+
     os.makedirs(REGIONS_DIR, exist_ok=True)
     category_dir = os.path.join(REGIONS_DIR, category)
     os.makedirs(category_dir, exist_ok=True)
@@ -522,7 +582,7 @@ def select_region(idx=1):
     roi = img[y1:y2, x1:x2]
     try:
         cv2.imwrite(fullpath, roi)
-        log(f"Đã lưu ảnh vùng vào: {fullpath}")
+        log(f"Đã lưu ảnh vùng vào: {fullpath}, tọa độ: {selected_region} , tâm tọa độ: {midselected_region}")
     except Exception as e:
         log(f"Lỗi lưu ROI image: {e}")
 
@@ -548,12 +608,12 @@ frame_range.pack(pady=5)
 tk.Label(frame_range, text="Start index:").grid(row=0, column=0, padx=5)
 entry_start = tk.Entry(frame_range, width=5)
 entry_start.grid(row=0, column=1, padx=5)
-entry_start.insert(0, "1")
+entry_start.insert(0, "4")
 
 tk.Label(frame_range, text="End index:").grid(row=0, column=2, padx=5)
 entry_end = tk.Entry(frame_range, width=5)
 entry_end.grid(row=0, column=3, padx=5)
-entry_end.insert(0, "1")
+entry_end.insert(0, "4")
 
 open_button = tk.Button(frame_range, text="Open Tabs", font=("Arial", 12), bg="blue", fg="white", command=open_tabs)
 open_button.grid(row=0, column=4, padx=8)
@@ -569,7 +629,7 @@ frame_region.pack(pady=8)
 tk.Label(frame_region, text="Index chọn vùng:").grid(row=0, column=0, padx=5)
 entry_region_index = tk.Entry(frame_region, width=6)
 entry_region_index.grid(row=0, column=1, padx=5)
-entry_region_index.insert(0, "1")
+entry_region_index.insert(0, "4")
 
 region_button = tk.Button(frame_region, text="Chọn & Lưu vùng (index)", font=("Arial", 12), bg="green", fg="white",
                           command=lambda: threading.Thread(target=select_region, args=(int(entry_region_index.get()),), daemon=True).start())
